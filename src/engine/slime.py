@@ -26,7 +26,7 @@ class Slime:
         self.rigid_offsets = None
         self.rigid_radius = 0.0
 
-        # 🔹 더 많은 파티클로 부드러운 슬라임
+        # 파티클 개수
         count = 48
         radius = 60
         for i in range(count):
@@ -49,7 +49,7 @@ class Slime:
             rest = (p2.pos - p1.pos).length()
             self.springs.append(Spring(p1, p2, rest, k=30.0))
 
-        # 🔹 초기 원형 모양 저장 (Shape Matching용)
+        # 초기 원형 모양 저장 (for Shape Matching)
         init_center = self.compute_center()
         self.rest_offsets = [p.pos - init_center for p in self.particles]
         self.base_radius = sum(off.length() for off in self.rest_offsets) / len(self.rest_offsets)
@@ -191,7 +191,7 @@ class Slime:
                 self.rigid_offsets = None
 
         # =========================
-        # SOFT / SEMI-RIGID
+        # SOFT / SEMIRIGID
         # =========================
         if not self.is_rigid:
             soft_factor, center_factor = self._compute_soft_center_blend(temp)
@@ -229,18 +229,18 @@ class Slime:
                         if F.length() > max_force:
                             F = F.normalize() * max_force
 
-                        # (1) edge 두 파티클에 힘 분배 → 표면이 먼저 찌그러짐
+                        # (1) edge 두 파티클에 힘 분배 -> 표면이 먼저 찌그러짐
                         if soft_factor > 0.0:
                             self.particles[i1].apply_force(F * soft_factor * 0.7)
                             self.particles[i2].apply_force(F * soft_factor * 0.7)
 
-                            # (2) edge 중간점 근처 파티클에도 추가 분배 → 더 깊은 local 변형
+                            # (2) edge 중간점 근처 파티클에도 추가 분배 -> 더 깊은 local 변형
                             mid = (p1 + p2) * 0.5
                             for pi, pp in enumerate(self.particles):
                                 if (pp.pos - mid).length() < 15.0:
                                     self.particles[pi].apply_force(F * soft_factor * 0.5)
 
-                        # (3) center에도 일부 힘 적용 → 덩어리 전체 이동
+                        # (3) center에도 일부 힘 적용 -> 덩어리 전체 이동
                         if center_factor > 0.0:
                             center_force += F * center_factor
 

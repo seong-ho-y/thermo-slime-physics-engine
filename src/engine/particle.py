@@ -26,14 +26,14 @@ class Particle:
             # falloff 기반 힘 (0~1)
             falloff = (radius - dist) / radius
 
-            # 🔹 falloff^2 로 곡선화 → 가까운 거리에서도 급팽창 방지
-            falloff = falloff ** 3
+            # 🔹 falloff^2 로 곡선화
+            falloff = falloff ** 2
 
             # 힘 계산
             F = direction * falloff * strength
 
-            # 🔹 안전 장치: force clamp
-            max_force = strength * 1.2   # 필요하면 1.0~2.0 사이로 조절
+            # 안전 장치: force clamp
+            max_force = strength * 1.2
             if F.length() > max_force:
                 F = F.normalize() * max_force
 
@@ -57,7 +57,7 @@ class Particle:
 
         self.vel *= damping
 
-        # 간단한 화면 경계 충돌 (800x600 가정)
+        # 화면 경계 충돌
         if self.pos.x < self.radius:
             self.pos.x = self.radius
             self.vel.x *= -0.5

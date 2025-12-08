@@ -17,7 +17,7 @@ class Spring:
             return
         direction = delta / dist
 
-        # 🔹 온도에 따른 수축 (T 낮을수록 길이 줄어듦 → 원형/단단해짐)
+        # 온도에 따른 수축 (T 낮을수록 길이 줄어듦 -> 단단해짐)
         if temperature >= 10.0:
             shrink = 1.0
         elif temperature <= 0.0:
@@ -29,7 +29,7 @@ class Spring:
 
         rest_length = self.rest_length0 * shrink
 
-        # 🔹 온도에 따라 k 약간만 변경 (폭주 막기 위해 보수적으로)
+        # 온도에 따라 k 약간만 변경
         if temperature < 10.0:
             k = self.k0 * 1.2
         elif temperature > 30.0:
