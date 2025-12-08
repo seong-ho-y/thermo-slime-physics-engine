@@ -74,11 +74,9 @@ class Slime:
         if temp >= 25.0:
             soft_factor = 0.8
         elif temp > 10.0:
-            # 10~25 구간 선형 보간
             t = (temp - 10.0) / 15.0  # 0~1
             soft_factor = 0.2 + 0.6 * t
         else:  # 0 < temp <= 10
-            # 0~10에서 0.0~0.2로 선형 증가
             t = max(0.0, temp / 10.0)
             soft_factor = 0.2 * t
 
@@ -100,27 +98,24 @@ class Slime:
         elif temp <= 0.0:
             shrink = 0.7
         else:
-            # 0~10°C : 0.7 ~ 1.0 사이 선형
-            t = temp / 10.0
-            shrink = 0.7 + 0.3 * t
+            t = temp / 10.0           # 0~1
+            shrink = 0.7 + 0.3 * t    # 0.7 ~ 1.0
 
         target_radius = self.base_radius * shrink
 
         # 온도에 따른 형태 복원 강도
         if temp >= 25.0:
-            stiffness = 0.05   # 매우 말랑 → 거의 안 당김
+            stiffness = 0.05   # 매우 말랑
         elif temp > 10.0:
-            stiffness = 0.12   # 중간 정도
+            stiffness = 0.12   # 중간
         else:  # 0 < temp <= 10
-            stiffness = 0.25   # 거의 덩어리 → 꽤 강하게 원형 유지
+            stiffness = 0.25   # 단단
 
-        # 각 파티클을 목표 원형에 조금씩 끌어당김
         for p in self.particles:
             rel = p.pos - center
             dist = rel.length()
             if dist == 0:
                 continue
-            # 방향은 유지, 거리만 target_radius에 가깝게
             desired = center + (rel / dist) * target_radius
             p.pos = p.pos.lerp(desired, stiffness)
 
@@ -149,14 +144,12 @@ class Slime:
         def cross(o, a, b):
             return (a[1].x - o[1].x) * (b[1].y - o[1].y) - (a[1].y - o[1].y) * (b[1].x - o[1].x)
 
-        # lower hull
         lower = []
         for p in pts_sorted:
             while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
                 lower.pop()
             lower.append(p)
 
-        # upper hull
         upper = []
         for p in reversed(pts_sorted):
             while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
@@ -177,7 +170,6 @@ class Slime:
         # RIGID 모드 판단
         # =========================
         if temp <= 0.0:
-            # Rigid 모드 진입 처리
             if not self.is_rigid:
                 center = self.compute_center()
                 self.center_pos = pygame.Vector2(center)
@@ -194,9 +186,7 @@ class Slime:
 
             self.is_rigid = True
         else:
-            # Soft / Semi-Rigid
             if self.is_rigid:
-                # 막 Rigid에서 나왔다면 플래그 정리
                 self.is_rigid = False
                 self.rigid_offsets = None
 
@@ -204,18 +194,16 @@ class Slime:
         # SOFT / SEMI-RIGID
         # =========================
         if not self.is_rigid:
-            # 온도 기반 블렌딩 비율
             soft_factor, center_factor = self._compute_soft_center_blend(temp)
 
             # 현재 중심
             center = self.compute_center()
             self.center_pos = pygame.Vector2(center)
 
-            # 1) Convex Hull 기반 마우스 충돌 → 파티클/센터 하이브리드 force
+            # 1) Convex Hull 기반 마우스 충돌
             center_force = pygame.Vector2(0, 0)
-
             mouse_radius = 40
-            base_strength = 700.0  # 필요하면 튜닝
+            base_strength = 700.0
 
             hull = self._compute_convex_hull()
             if len(hull) >= 2:
@@ -223,7 +211,6 @@ class Slime:
                     i1, p1 = hull[k]
                     i2, p2 = hull[(k + 1) % len(hull)]
 
-                    # 마우스에서 선분 p1-p2에 내린 수선의 발
                     closest = self._closest_point_on_segment(p1, p2, mouse_pos)
                     delta = closest - mouse_pos
                     dist = delta.length()
@@ -233,30 +220,34 @@ class Slime:
                             dist = 0.01
                         direction = delta / dist
 
-                        # falloff: 0~1, 가까울수록 커짐 (제곱으로 부드럽게)
                         falloff = (mouse_radius - dist) / mouse_radius
-                        falloff = falloff * falloff
+                        falloff = falloff * falloff  # 부드러운 감소
 
                         F = direction * falloff * base_strength
 
-                        # force clamp
                         max_force = base_strength * 1.2
                         if F.length() > max_force:
                             F = F.normalize() * max_force
 
-                        # ★ particle 두 개에 force 분배 → 표면이 먼저 반응
+                        # (1) edge 두 파티클에 힘 분배 → 표면이 먼저 찌그러짐
                         if soft_factor > 0.0:
-                            self.particles[i1].apply_force(F * soft_factor * 0.5)
-                            self.particles[i2].apply_force(F * soft_factor * 0.5)
+                            self.particles[i1].apply_force(F * soft_factor * 0.7)
+                            self.particles[i2].apply_force(F * soft_factor * 0.7)
 
-                        # ★ center에도 일부 force 적용 → 전체 이동
+                            # (2) edge 중간점 근처 파티클에도 추가 분배 → 더 깊은 local 변형
+                            mid = (p1 + p2) * 0.5
+                            for pi, pp in enumerate(self.particles):
+                                if (pp.pos - mid).length() < 15.0:
+                                    self.particles[pi].apply_force(F * soft_factor * 0.5)
+
+                        # (3) center에도 일부 힘 적용 → 덩어리 전체 이동
                         if center_factor > 0.0:
                             center_force += F * center_factor
 
             # 2) 슬라임 중심 이동
             acc_center = center_force / self.mass
             self.center_vel += acc_center * dt
-            self.center_vel *= 0.98  # 중심 감쇠
+            self.center_vel *= 0.98
             center_shift = self.center_vel * dt
 
             for p in self.particles:
@@ -271,7 +262,7 @@ class Slime:
                 p.update(dt, temp)
 
             # 5) Soft/Semi-Rigid 전용 벽 충돌 보정
-            radius = self.base_radius * 1.1  # 조금 여유 있게 boundary
+            radius = self.base_radius * 1.1
 
             screen_w = 800
             screen_h = 600
@@ -294,7 +285,7 @@ class Slime:
                 for p in self.particles:
                     p.pos += shift
 
-            # 6) 형태 복원 단계 – 항상 원형으로 돌아가려는 힘
+            # 6) 형태 복원 – 원형으로 돌아가려는 힘
             self._shape_matching(temp)
 
             return
@@ -305,12 +296,11 @@ class Slime:
         total_force = pygame.Vector2(0, 0)
         total_torque = 0.0
 
-        # Circle vs Mouse 충돌 (슬라임 전체를 하나의 원으로 본다)
         delta = self.center_pos - mouse_pos
         dist = delta.length()
 
         radius = self.rigid_radius
-        mouse_influence_radius = radius + 40  # 약간 여유 있게
+        mouse_influence_radius = radius + 40
 
         if dist < mouse_influence_radius:
             if dist == 0:
@@ -322,7 +312,6 @@ class Slime:
             F = normal * penetration * strength
             total_force += F
 
-            # 충돌 지점은 center에서 normal 방향으로 radius만큼 떨어진 곳으로 근사
             collision_point = self.center_pos - normal * radius
             r = collision_point - self.center_pos
             torque = r.x * F.y - r.y * F.x
@@ -331,10 +320,10 @@ class Slime:
         # 선형 운동
         acc = total_force / self.mass
         self.center_vel += acc * dt
-        self.center_vel *= 0.98  # 공기저항 같은 감쇠
+        self.center_vel *= 0.98
         self.center_pos += self.center_vel * dt
 
-        # 화면 경계 처리 (center 기준)
+        # 화면 경계 처리
         if self.center_pos.x < radius:
             self.center_pos.x = radius
             self.center_vel.x *= -0.4
@@ -352,7 +341,7 @@ class Slime:
         # 회전 운동
         angular_acc = total_torque / self.inertia
         self.angular_vel += angular_acc * dt
-        self.angular_vel *= 0.97  # 회전 감쇠
+        self.angular_vel *= 0.97
         self.angle += self.angular_vel * dt
 
         # 파티클 위치 재생성 (center + 회전된 offset)
