@@ -27,7 +27,7 @@ class Slime:
         self.rigid_radius = 0.0
 
         # 🔹 더 많은 파티클로 부드러운 슬라임
-        count = 32
+        count = 48
         radius = 60
         for i in range(count):
             ang = (2 * math.pi / count) * i
@@ -54,6 +54,9 @@ class Slime:
         self.rest_offsets = [p.pos - init_center for p in self.particles]
         self.base_radius = sum(off.length() for off in self.rest_offsets) / len(self.rest_offsets)
 
+    # ===========================
+    # 기본 유틸
+    # ===========================
     def compute_center(self):
         return sum((p.pos for p in self.particles), pygame.Vector2()) / len(self.particles)
 
@@ -66,7 +69,7 @@ class Slime:
         온도에 따라 파티클/센터 힘 비율 결정
         temp > 25   : 매우 말랑 → 파티클 위주 (0.8 / 0.2)
         10~25 사이  : 점점 덩어리 느낌 (선형 보간)
-        0~10 사이   : 거의 덩어리 (0.2 / 0.8 → 0에 가까워짐)
+        0~10 사이   : 거의 덩어리 (0.0~0.2 / 1.0~0.8)
         """
         if temp >= 25.0:
             soft_factor = 0.8
@@ -122,10 +125,53 @@ class Slime:
             p.pos = p.pos.lerp(desired, stiffness)
 
     # ===========================
+    # Convex Hull Utility
+    # ===========================
+    def _closest_point_on_segment(self, a: pygame.Vector2, b: pygame.Vector2, p: pygame.Vector2) -> pygame.Vector2:
+        """
+        선분 AB 위에서 점 P와 가장 가까운 점을 구함
+        """
+        ab = b - a
+        ab_len2 = ab.length_squared()
+        if ab_len2 == 0:
+            return pygame.Vector2(a)
+        t = (p - a).dot(ab) / ab_len2
+        t = max(0.0, min(1.0, t))
+        return a + ab * t
+
+    def _compute_convex_hull(self):
+        """
+        Convex Hull을 (particle_index, pos) 형태로 반환.
+        """
+        pts = [(i, p.pos) for i, p in enumerate(self.particles)]
+        pts_sorted = sorted(pts, key=lambda x: (x[1].x, x[1].y))
+
+        def cross(o, a, b):
+            return (a[1].x - o[1].x) * (b[1].y - o[1].y) - (a[1].y - o[1].y) * (b[1].x - o[1].x)
+
+        # lower hull
+        lower = []
+        for p in pts_sorted:
+            while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+                lower.pop()
+            lower.append(p)
+
+        # upper hull
+        upper = []
+        for p in reversed(pts_sorted):
+            while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+                upper.pop()
+            upper.append(p)
+
+        hull = lower[:-1] + upper[:-1]
+        return hull  # [(index, pos), ...]
+
+    # ===========================
     # MAIN UPDATE
     # ===========================
     def update(self, dt, mouse_pos):
         temp = self.temperature.get_current_temperature()
+        mouse_pos = pygame.Vector2(mouse_pos)
 
         # =========================
         # RIGID 모드 판단
@@ -165,30 +211,49 @@ class Slime:
             center = self.compute_center()
             self.center_pos = pygame.Vector2(center)
 
-            # 1) 마우스 충돌 → 파티클/센터 하이브리드 force
+            # 1) Convex Hull 기반 마우스 충돌 → 파티클/센터 하이브리드 force
             center_force = pygame.Vector2(0, 0)
 
             mouse_radius = 40
-            base_strength = 2000.0
+            base_strength = 700.0  # 필요하면 튜닝
 
-            for p in self.particles:
-                delta = p.pos - mouse_pos
-                dist = delta.length()
-                if dist < mouse_radius:
-                    if dist == 0:
-                        dist = 0.01
-                    direction = delta / dist
-                    penetration = mouse_radius - dist
+            hull = self._compute_convex_hull()
+            if len(hull) >= 2:
+                for k in range(len(hull)):
+                    i1, p1 = hull[k]
+                    i2, p2 = hull[(k + 1) % len(hull)]
 
-                    F = direction * penetration * base_strength
+                    # 마우스에서 선분 p1-p2에 내린 수선의 발
+                    closest = self._closest_point_on_segment(p1, p2, mouse_pos)
+                    delta = closest - mouse_pos
+                    dist = delta.length()
 
-                    # 일부는 파티클에, 일부는 슬라임 중심에
-                    if soft_factor > 0.0:
-                        p.apply_force(F * soft_factor)
-                    if center_factor > 0.0:
-                        center_force += F * center_factor
+                    if dist < mouse_radius:
+                        if dist == 0:
+                            dist = 0.01
+                        direction = delta / dist
 
-            # 2) 슬라임 중심 이동 (Soft 상태에서도 조금씩 통째로 움직이게)
+                        # falloff: 0~1, 가까울수록 커짐 (제곱으로 부드럽게)
+                        falloff = (mouse_radius - dist) / mouse_radius
+                        falloff = falloff * falloff
+
+                        F = direction * falloff * base_strength
+
+                        # force clamp
+                        max_force = base_strength * 1.2
+                        if F.length() > max_force:
+                            F = F.normalize() * max_force
+
+                        # ★ particle 두 개에 force 분배 → 표면이 먼저 반응
+                        if soft_factor > 0.0:
+                            self.particles[i1].apply_force(F * soft_factor * 0.5)
+                            self.particles[i2].apply_force(F * soft_factor * 0.5)
+
+                        # ★ center에도 일부 force 적용 → 전체 이동
+                        if center_factor > 0.0:
+                            center_force += F * center_factor
+
+            # 2) 슬라임 중심 이동
             acc_center = center_force / self.mass
             self.center_vel += acc_center * dt
             self.center_vel *= 0.98  # 중심 감쇠
@@ -204,15 +269,14 @@ class Slime:
             # 4) 파티클 업데이트
             for p in self.particles:
                 p.update(dt, temp)
-            # ============ Soft/Semi-Rigid 전용 벽 충돌 보정 ============
+
+            # 5) Soft/Semi-Rigid 전용 벽 충돌 보정
             radius = self.base_radius * 1.1  # 조금 여유 있게 boundary
 
-            # 화면 크기 (상수화되어 있으면 수정)
             screen_w = 800
             screen_h = 600
 
             cx, cy = self.center_pos.x, self.center_pos.y
-
             shift = pygame.Vector2(0, 0)
 
             if cx < radius:
@@ -225,16 +289,14 @@ class Slime:
             elif cy > screen_h - radius:
                 shift.y = (screen_h - radius) - cy
 
-            # shift가 0이 아니라면 전체 이동
             if shift.length_squared() > 0:
                 self.center_pos += shift
                 for p in self.particles:
                     p.pos += shift
 
-            # 5) 🔹 형태 복원 단계 – 항상 원형으로 돌아가려는 힘
+            # 6) 형태 복원 단계 – 항상 원형으로 돌아가려는 힘
             self._shape_matching(temp)
 
-            # Soft / Semi-Rigid는 여기서 끝
             return
 
         # =========================
@@ -243,7 +305,7 @@ class Slime:
         total_force = pygame.Vector2(0, 0)
         total_torque = 0.0
 
-        # ---- Circle vs Mouse 충돌 (슬라임 전체를 하나의 원으로 본다) ----
+        # Circle vs Mouse 충돌 (슬라임 전체를 하나의 원으로 본다)
         delta = self.center_pos - mouse_pos
         dist = delta.length()
 
@@ -266,13 +328,13 @@ class Slime:
             torque = r.x * F.y - r.y * F.x
             total_torque += torque
 
-        # ---- 선형 운동 ----
+        # 선형 운동
         acc = total_force / self.mass
         self.center_vel += acc * dt
         self.center_vel *= 0.98  # 공기저항 같은 감쇠
         self.center_pos += self.center_vel * dt
 
-        # 간단한 화면 경계 처리 (center 기준)
+        # 화면 경계 처리 (center 기준)
         if self.center_pos.x < radius:
             self.center_pos.x = radius
             self.center_vel.x *= -0.4
@@ -287,13 +349,13 @@ class Slime:
             self.center_pos.y = 600 - radius
             self.center_vel.y *= -0.4
 
-        # ---- 회전 운동 ----
+        # 회전 운동
         angular_acc = total_torque / self.inertia
         self.angular_vel += angular_acc * dt
         self.angular_vel *= 0.97  # 회전 감쇠
         self.angle += self.angular_vel * dt
 
-        # ---- 파티클 위치 재생성 (center + 회전된 offset) ----
+        # 파티클 위치 재생성 (center + 회전된 offset)
         cos_a = math.cos(self.angle)
         sin_a = math.sin(self.angle)
 
@@ -308,14 +370,15 @@ class Slime:
     # RENDER
     # ===========================
     def render(self, screen):
-        # Soft/세미일 때만 스프링 시각화
+        # Soft/세미일 때 스프링 시각화
         if not self.is_rigid:
             for s in self.springs:
                 pygame.draw.line(screen, (120, 120, 200), s.p1.pos, s.p2.pos, 1)
+
         # 마우스 충돌 범위 시각화
         mouse_pos = pygame.mouse.get_pos()
         pygame.draw.circle(screen, (255, 100, 100), mouse_pos, 40, 1)
 
-        
+        # 파티클 그리기
         for p in self.particles:
             p.render(screen)
